@@ -1,2 +1,14 @@
 /bbprobe
 /dist/
+
+# python (nsx-robotframework)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+python/nsx-robotframework/build/
+python/nsx-robotframework/dist/
+python/nsx-robotframework/.ruff_cache/
+python/nsx-robotframework/.pytest_cache/
+.robot-results/

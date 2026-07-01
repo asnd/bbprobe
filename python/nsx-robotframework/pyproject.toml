@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nsx-robotframework"
+version = "0.1.0"
+description = "Robot Framework library for VMware NSX-T 4.x, built as a thin wrapper over the NSX-T Policy and Manager REST APIs."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "bbprobe contributors" }]
+keywords = ["robotframework", "nsx-t", "nsx", "vmware", "testing", "library"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Testing",
+    "Framework :: Robot Framework",
+    "Framework :: Robot Framework :: Library",
+]
+dependencies = [
+    "requests>=2.28",
+    "robotframework>=5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "requests_mock>=1.11",
+    "ruff>=0.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/asnd/bbprobe"
+Repository = "https://github.com/asnd/bbprobe"
+
+[tool.setuptools]
+py-modules = ["NSXLibrary"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+nsx_robotframework = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = ["E501"]
