@@ -19,6 +19,8 @@ type resultJSON struct {
 	Prober   string   `json:"prober"`
 	Attempt  int      `json:"attempt"`
 	Success  bool     `json:"success"`
+	TimedOut bool     `json:"timed_out,omitempty"`
+	Error    string   `json:"error,omitempty"`
 	Duration float64  `json:"duration_seconds"`
 	Metrics  []sample `json:"metrics"`
 	Debug    string   `json:"debug,omitempty"`
@@ -35,6 +37,7 @@ type summary struct {
 	Total        int     `json:"total"`
 	Succeeded    int     `json:"succeeded"`
 	Failed       int     `json:"failed"`
+	MinSuccess   int     `json:"min_success"`
 	Latency      latency `json:"latency_seconds"`
 }
 
@@ -77,18 +80,25 @@ func familiesToSamples(mfs []*dto.MetricFamily) []sample {
 }
 
 // buildOutput assembles the final JSON document from raw probe results.
-func buildOutput(version, target string, results []probeResult) output {
+// repeat is the attempts-per-module; minSuccess is the pass threshold (0 = all
+// attempts must succeed). Latency is aggregated only over attempts that actually
+// ran (attempts skipped by the global deadline are excluded).
+func buildOutput(version, target string, results []probeResult, repeat, minSuccess int) output {
 	o := output{Version: version, Target: target}
 	o.Summary.Total = len(results)
+	o.Summary.MinSuccess = minSuccess
 
 	first := true
 	var sum float64
+	var ran int
 	for _, r := range results {
 		o.Results = append(o.Results, resultJSON{
 			Module:   r.module,
 			Prober:   r.prober,
 			Attempt:  r.attempt,
 			Success:  r.success,
+			TimedOut: r.timedOut,
+			Error:    r.reason,
 			Duration: r.duration,
 			Metrics:  familiesToSamples(r.families),
 			Debug:    r.debug,
@@ -97,6 +107,9 @@ func buildOutput(version, target string, results []probeResult) output {
 			o.Summary.Succeeded++
 		} else {
 			o.Summary.Failed++
+		}
+		if !r.ran {
+			continue
 		}
 		d := r.duration
 		if first {
@@ -111,14 +124,42 @@ func buildOutput(version, target string, results []probeResult) output {
 			}
 		}
 		sum += d
+		ran++
 	}
-	if o.Summary.Total > 0 {
-		o.Summary.Latency.Avg = sum / float64(o.Summary.Total)
-		if o.Summary.Failed == 0 {
-			o.Summary.ProbeSuccess = 1
-		}
+	if ran > 0 {
+		o.Summary.Latency.Avg = sum / float64(ran)
+	}
+	if overallSuccess(results, repeat, minSuccess) {
+		o.Summary.ProbeSuccess = 1
 	}
 	return o
+}
+
+// overallSuccess applies the exit-code policy: every module must meet its
+// success threshold. With minSuccess <= 0 the threshold is "all attempts
+// succeed"; otherwise a module passes if at least minSuccess attempts succeed.
+func overallSuccess(results []probeResult, repeat, minSuccess int) bool {
+	succeeded := map[string]int{}
+	seen := map[string]bool{}
+	for _, r := range results {
+		seen[r.module] = true
+		if r.success {
+			succeeded[r.module]++
+		}
+	}
+	if len(seen) == 0 {
+		return false
+	}
+	for m := range seen {
+		threshold := repeat
+		if minSuccess > 0 {
+			threshold = minSuccess
+		}
+		if succeeded[m] < threshold {
+			return false
+		}
+	}
+	return true
 }
 
 // writeProm emits the standard Prometheus text exposition of the gathered

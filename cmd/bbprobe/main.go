@@ -47,15 +47,17 @@ func run(args []string) int {
 	}
 
 	var (
-		moduleFlag  = fs.String("module", "", "comma-separated module name(s) from the config (e.g. http_2xx,icmp)")
-		targetFlag  = fs.String("target", "", "probe target: URL, host, or IP")
-		dstFlag     = fs.String("dst", "", "alias for --target (destination host/IP or FQDN)")
-		configFlag  = fs.String("config", "", "path to a blackbox.yml (default: built-in embedded config)")
-		timeoutFlag = fs.Duration("timeout", 10*time.Second, "per-attempt probe timeout")
-		formatFlag  = fs.String("format", "json", "output format: json|prom")
-		debugFlag   = fs.Bool("debug", false, "include prober debug plaintext in the result")
-		repeatFlag  = fs.Int("repeat", 1, "number of attempts per module")
-		versionFlag = fs.Bool("version", false, "print version/commit and exit")
+		moduleFlag   = fs.String("module", "", "comma-separated module name(s) from the config (e.g. http_2xx,icmp)")
+		targetFlag   = fs.String("target", "", "probe target: URL, host, or IP")
+		dstFlag      = fs.String("dst", "", "alias for --target (destination host/IP or FQDN)")
+		configFlag   = fs.String("config", "", "path to a blackbox.yml (default: built-in embedded config)")
+		timeoutFlag  = fs.Duration("timeout", 10*time.Second, "per-attempt probe timeout")
+		deadlineFlag = fs.Duration("deadline", 0, "global wall-clock cap for the whole run (0 = unlimited); remaining attempts are marked timed_out")
+		formatFlag   = fs.String("format", "json", "output format: json|prom")
+		debugFlag    = fs.Bool("debug", false, "include prober debug plaintext in the result")
+		repeatFlag   = fs.Int("repeat", 1, "number of attempts per module")
+		minSuccessF  = fs.Int("min-success", 0, "attempts per module that must succeed to pass (0 = all must succeed)")
+		versionFlag  = fs.Bool("version", false, "print version/commit and exit")
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -83,6 +85,18 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "error: --repeat must be >= 1")
 		return exitUsage
 	}
+	if *timeoutFlag <= 0 {
+		fmt.Fprintln(os.Stderr, "error: --timeout must be > 0")
+		return exitUsage
+	}
+	if *deadlineFlag < 0 {
+		fmt.Fprintln(os.Stderr, "error: --deadline must be >= 0")
+		return exitUsage
+	}
+	if *minSuccessF < 0 || *minSuccessF > *repeatFlag {
+		fmt.Fprintf(os.Stderr, "error: --min-success must be between 0 and --repeat (%d)\n", *repeatFlag)
+		return exitUsage
+	}
 	if *formatFlag != "json" && *formatFlag != "prom" {
 		fmt.Fprintf(os.Stderr, "error: --format must be json or prom, got %q\n", *formatFlag)
 		return exitUsage
@@ -108,11 +122,31 @@ func run(args []string) int {
 	}
 
 	// --- run probes ---
+	// A single root context bounds the whole run when --deadline is set, so an
+	// unreachable target can't hang for modules*repeat*timeout.
+	rootCtx := context.Background()
+	if *deadlineFlag > 0 {
+		var cancel context.CancelFunc
+		rootCtx, cancel = context.WithTimeout(rootCtx, *deadlineFlag)
+		defer cancel()
+	}
+
 	var results []probeResult
 	for _, mname := range modules {
 		mod := cfg.Modules[mname]
 		for attempt := 1; attempt <= *repeatFlag; attempt++ {
-			ctx, cancel := context.WithTimeout(context.Background(), *timeoutFlag)
+			if rootCtx.Err() != nil {
+				// Global deadline already hit: record without running.
+				results = append(results, probeResult{
+					module:   mname,
+					prober:   mod.Prober,
+					attempt:  attempt,
+					timedOut: true,
+					reason:   "global deadline exceeded",
+				})
+				continue
+			}
+			ctx, cancel := context.WithTimeout(rootCtx, *timeoutFlag)
 			r := runProbe(ctx, target, mod, *debugFlag)
 			cancel()
 			if r.err != nil {
@@ -133,7 +167,7 @@ func run(args []string) int {
 			return exitUsage
 		}
 	} else {
-		out := buildOutput(version+"+"+commit, target, results)
+		out := buildOutput(version+"+"+commit, target, results, *repeatFlag, *minSuccessF)
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(out); err != nil {
@@ -142,13 +176,11 @@ func run(args []string) int {
 		}
 	}
 
-	// --- exit code: 0 only if every attempt succeeded ---
-	for _, r := range results {
-		if !r.success {
-			return exitProbeFail
-		}
+	// --- exit code: 0 only if every module meets its success threshold ---
+	if overallSuccess(results, *repeatFlag, *minSuccessF) {
+		return exitSuccess
 	}
-	return exitSuccess
+	return exitProbeFail
 }
 
 // resolveModules splits a comma list, trims blanks, and validates each name

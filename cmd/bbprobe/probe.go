@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/blackbox_exporter/config"
@@ -24,7 +26,10 @@ type probeResult struct {
 	duration float64
 	families []*dto.MetricFamily
 	debug    string
-	err      error
+	reason   string // human-readable failure reason (empty on success)
+	timedOut bool   // failed because a context deadline (per-attempt or global) fired
+	ran      bool   // false for attempts skipped because the global deadline was already hit
+	err      error  // internal error (aborts the run); distinct from a probe failure
 }
 
 // loadConfig loads a blackbox configuration. When path is empty the embedded
@@ -104,9 +109,73 @@ func runProbe(ctx context.Context, target string, module config.Module, debug bo
 		return probeResult{err: fmt.Errorf("gathering metrics: %w", err)}
 	}
 
-	res := probeResult{success: success, duration: dur, families: mfs}
+	res := probeResult{success: success, duration: dur, families: mfs, ran: true}
+	if !success {
+		res.reason = lastLogReason(logBuf.String())
+		if ctx.Err() == context.DeadlineExceeded {
+			res.timedOut = true
+			if res.reason == "" {
+				res.reason = "context deadline exceeded"
+			}
+		}
+	}
 	if debug {
 		res.debug = prober.DebugOutput(&module, &logBuf, reg)
 	}
 	return res
+}
+
+// lastLogReason extracts a concise failure reason from the captured probe log:
+// the last ERROR (or WARN) line's err= value, falling back to its msg=.
+func lastLogReason(log string) string {
+	var best string
+	for _, line := range strings.Split(log, "\n") {
+		if strings.Contains(line, "level=ERROR") || strings.Contains(line, "level=WARN") {
+			best = line
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	if v, ok := logFieldValue(best, "err="); ok {
+		return v
+	}
+	if v, ok := logFieldValue(best, "msg="); ok {
+		return v
+	}
+	return strings.TrimSpace(best)
+}
+
+// logFieldValue returns the value of a `key=` field in an slog text line,
+// handling Go-quoted values (with escapes) and bare tokens.
+func logFieldValue(line, key string) (string, bool) {
+	i := strings.Index(line, key)
+	if i < 0 {
+		return "", false
+	}
+	rest := line[i+len(key):]
+	if rest == "" {
+		return "", false
+	}
+	if rest[0] == '"' {
+		for j := 1; j < len(rest); j++ {
+			switch rest[j] {
+			case '\\':
+				j++
+			case '"':
+				if v, err := strconv.Unquote(rest[:j+1]); err == nil {
+					return v, true
+				}
+				return rest[1:j], true
+			}
+		}
+		if v, err := strconv.Unquote(rest); err == nil {
+			return v, true
+		}
+		return rest[1:], true
+	}
+	if end := strings.IndexByte(rest, ' '); end >= 0 {
+		return rest[:end], true
+	}
+	return rest, true
 }

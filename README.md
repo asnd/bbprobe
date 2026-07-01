@@ -46,9 +46,11 @@ Version/commit are injected via ldflags (`make ... VERSION=v1.0.0`).
 | `--target`  | —       | **Required.** Probe target: URL, host, or IP. |
 | `--dst`     | —       | Alias for `--target` (destination host/IP/FQDN). |
 | `--config`  | *embedded* | Path to a `blackbox.yml`. Omit to use the built-in config. |
-| `--timeout` | `10s`   | Per-attempt probe timeout (wraps each probe in a context deadline). |
+| `--timeout` | `10s`   | Per-attempt probe timeout (wraps each probe in a context deadline). Must be > 0. |
+| `--deadline`| `0`     | Global wall-clock cap for the **whole run** (`0` = unlimited). Remaining attempts are marked `timed_out`. |
 | `--format`  | `json`  | `json` or `prom` (Prometheus text exposition). |
 | `--repeat`  | `1`     | Number of attempts per module. |
+| `--min-success` | `0` | Attempts per module that must succeed to pass (`0` = all must succeed). |
 | `--debug`   | `false` | Include the prober's debug plaintext in the JSON result. |
 | `--version` | —       | Print version/commit and exit. |
 
@@ -82,8 +84,8 @@ ssh vm 'bbprobe --module http_2xx --target https://example.com --format prom'
 
 | Code | Meaning |
 |------|---------|
-| `0`  | All probes/attempts **succeeded**. |
-| `1`  | Probes ran but at least one **failed**. |
+| `0`  | Every module met its success threshold (all attempts, or `--min-success`). |
+| `1`  | Probes ran but a module fell below its threshold. |
 | `2`  | Usage / config / internal error (message on stderr, **empty stdout**). |
 
 **stdout carries only the JSON/prom payload.** All logging goes to **stderr**.
@@ -100,6 +102,8 @@ ssh vm 'bbprobe --module http_2xx --target https://example.com --format prom'
       "prober": "http",
       "attempt": 1,
       "success": true,
+      "timed_out": false,        // omitted when false
+      "error": "",               // failure reason; omitted when empty
       "duration_seconds": 0.123,
       "metrics": [
         { "name": "probe_success", "value": 1 },
@@ -111,10 +115,11 @@ ssh vm 'bbprobe --module http_2xx --target https://example.com --format prom'
     }
   ],
   "summary": {
-    "probe_success": 1,          // 1 only if EVERY attempt succeeded
+    "probe_success": 1,          // 1 only if every module met its threshold
     "total": 1,
     "succeeded": 1,
     "failed": 0,
+    "min_success": 0,            // echoes --min-success
     "latency_seconds": { "min": 0.11, "avg": 0.12, "max": 0.13 }
   }
 }
@@ -124,9 +129,37 @@ ssh vm 'bbprobe --module http_2xx --target https://example.com --format prom'
 - `metrics[]` is a faithful flattening of the probe's Prometheus registry
   (name + labels + value), including labeled series such as the
   `probe_http_duration_seconds` phases.
-- `summary.probe_success` is the AND across all attempts and matches the exit code.
+- On failure, `error` carries the probe's own reason (e.g. `connection reset by
+  peer`, `context deadline exceeded`) and `timed_out` is `true` when a deadline
+  fired — so consumers see *why* without `--debug`.
+- `summary.probe_success` reflects the exit-code policy (see below) and matches
+  the exit code.
+- `summary.latency_seconds` is aggregated over attempts that actually ran
+  (attempts skipped by `--deadline` are excluded).
 - `--format prom` instead emits the standard Prometheus text exposition of the
   gathered registry (best used with a single module/attempt).
+
+## Timeouts, deadlines & intermittent faults
+
+Attempts run **sequentially**, so without a cap the worst-case wall-clock is
+`modules × repeat × timeout` — an unreachable target can hang an SSH-invoked
+test for a long time. Bound it with a global deadline:
+
+```sh
+# hard 8s cap; whatever hasn't run is marked timed_out and JSON is emitted at 8s
+bbprobe --module icmp,http_2xx --target 10.0.0.1 --repeat 3 --timeout 2s --deadline 8s
+```
+
+For **intermittent / lossy** links, sample with `--repeat` and tolerate a few
+failures with `--min-success`:
+
+```sh
+# 5 ICMP attempts; pass (exit 0) if at least 3 succeed
+bbprobe --module icmp --target 10.0.0.1 --repeat 5 --min-success 3
+```
+
+Failed and timed-out attempts still appear in `results[]` (with `error` /
+`timed_out`), so you get a full picture even when the run fails overall.
 
 ## ICMP without root
 
