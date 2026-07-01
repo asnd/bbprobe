@@ -9,7 +9,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 GO      ?= go
 BUILD   := CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)"
 
-.PHONY: all build cross linux-amd64 linux-arm64 darwin-arm64 test vet tidy clean
+.PHONY: all build cross linux-amd64 linux-386 linux-arm64 darwin-arm64 test vet tidy clean
 
 all: build
 
@@ -18,11 +18,15 @@ build:
 	$(BUILD) -o $(BINARY) $(PKG)
 
 ## cross: build all release targets into $(DIST)/
-cross: linux-amd64 linux-arm64 darwin-arm64
+cross: linux-amd64 linux-386 linux-arm64 darwin-arm64
 
 linux-amd64:
 	@mkdir -p $(DIST)
 	GOOS=linux GOARCH=amd64 $(BUILD) -o $(DIST)/$(BINARY)-linux-amd64 $(PKG)
+
+linux-386:
+	@mkdir -p $(DIST)
+	GOOS=linux GOARCH=386 $(BUILD) -o $(DIST)/$(BINARY)-linux-386 $(PKG)
 
 linux-arm64:
 	@mkdir -p $(DIST)

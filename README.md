@@ -24,7 +24,7 @@ Requires Go >= 1.24.
 
 ```sh
 make build            # native static binary ./bbprobe (CGO disabled)
-make cross            # dist/bbprobe-{linux-amd64,linux-arm64,darwin-arm64}
+make cross            # dist/bbprobe-{linux-amd64,linux-386,linux-arm64,darwin-arm64}
 make test             # unit tests
 make vet              # go vet
 ```
