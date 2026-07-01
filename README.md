@@ -215,3 +215,32 @@ HTTP Endpoint Is Healthy And Fast
 `Execute Command` returns the JSON on stdout and the process exit code via
 `return_rc`. Because logs go to stderr, `${stdout}` parses cleanly as JSON.
 ```
+
+## Robot Framework — NSX-T (`nsx-robotframework`)
+
+A companion Robot Framework library for **VMware NSX-T 4.x** lives under
+[`python/nsx-robotframework/`](python/nsx-robotframework/). It is a thin
+wrapper over the NSX-T Policy (`/policy/api/v1`) and Manager (`/api/v1`) REST
+APIs: one authenticated session, generic verbs, async task polling, and intent
+realization-state waiting — the foundation for asserting NSX topology from the
+same suites that run `bbprobe`.
+
+```robotframework
+*** Settings ***
+Library    NSXLibrary
+
+*** Test Cases ***
+Web Segment Is Realized And Carries The App VM
+    Connect To NSX    https://nsx.example.local    admin    ${NSX_PASS}
+    ...                verify=${FALSE}
+    NSX Segment Should Be Realized    web    timeout=120
+    NSX Segment Should Contain VM     web    vm-123
+    [Teardown]    Disconnect From NSX
+```
+
+Install with `pip install -e python/nsx-robotframework` (or `pip install
+nsx-robotframework` once published). Keywords span segments, T0/T1 gateways,
+NAT, edge firewall, BGP/BFD, T1 load balancing, and DHCP. See the [package
+README](python/nsx-robotframework/README.md) for the full keyword reference and
+the mocked test suites.
+
